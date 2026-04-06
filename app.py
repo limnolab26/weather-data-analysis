@@ -35,7 +35,7 @@ def setup_korean_font():
     font_list = ['NanumGothic', 'Malgun Gothic', 'AppleGothic', 'DejaVu Sans']
     found = False
     for f in font_list:
-        if any(f in font.name for font in fm.font_manager.ttflist):
+        if any(f in font.name for font in fm.font_Manager.ttflist):
             plt.rcParams['font.family'] = f
             found = True
             break
