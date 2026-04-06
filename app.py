@@ -1,5 +1,5 @@
-# app.py — 기상자료 보고서 생성기 Web App v3.0
-# 변경사항: 대화형 차트(Plotly), 동적 피벗표, Python 고품질 차트(Matplotlib) 추가
+# app.py — 기상자료 보고서 생성기 Web App v3.1 (Bug Fix)
+# 변경사항: Matplotlib fontManager AttributeError 수정 및 폰트 로딩 로직 개선
 # 실행: streamlit run app.py
 
 import streamlit as st
@@ -20,7 +20,6 @@ try:
     from excel_generator import generate_excel_report
     from pdf_generator import generate_pdf_report
 except ImportError:
-    # 모듈이 없을 경우를 대비한 가상 클래스/함수 정의 (테스트용)
     class WeatherDataProcessor:
         def process(self, files): return pd.DataFrame()
     def generate_excel_report(df): return b""
@@ -32,16 +31,30 @@ def setup_korean_font():
     """Matplotlib 한글 폰트 설정 (시스템 환경별 폴백 적용)"""
     import matplotlib.font_manager as fm
     
-    font_list = ['NanumGothic', 'Malgun Gothic', 'AppleGothic', 'DejaVu Sans']
-    found = False
-    for f in font_list:
-        if any(f in font.name for font in fm.font_Manager.ttflist):
+    # 폰트 설정 초기화
+    plt.rcParams['axes.unicode_minus'] = False
+    
+    # 1. 시스템에 설치된 실제 폰트 이름 리스트 가져오기
+    # fm.fontManager (O) - 최신 matplotlib 표준 방식입니다.
+    try:
+        available_fonts = [f.name for f in fm.fontManager.ttflist]
+    except Exception:
+        available_fonts = fm.get_font_names() if hasattr(fm, 'get_font_names') else []
+
+    # 2. 우선 순위별 폰트 매칭
+    font_priority = ['NanumGothic', 'Malgun Gothic', 'AppleGothic', 'DejaVu Sans']
+    found_font = None
+    
+    for f in font_priority:
+        if f in available_fonts:
             plt.rcParams['font.family'] = f
-            found = True
+            found_font = f
             break
     
-    plt.rcParams['axes.unicode_minus'] = False
-    return found
+    if not found_font:
+        plt.rcParams['font.family'] = 'sans-serif'
+        
+    return found_font
 
 def get_chart_bytes(fig) -> bytes:
     """Matplotlib Figure를 PNG 바이트로 변환"""
@@ -68,15 +81,12 @@ def add_season_column(df: pd.DataFrame) -> pd.DataFrame:
 def prepare_chart_data(df: pd.DataFrame, element: str, freq: str) -> pd.DataFrame:
     """차트용 데이터 집계 (freq: 'D', 'ME', 'YE')"""
     temp_df = df.copy()
-    # 날짜 인덱스 설정 및 리샘플링
     temp_df = temp_df.set_index('date')
     
     if element == 'temp_group':
-        # 기온 그룹(평균, 최고, 최저) 특별 처리
         cols = ['temp_avg', 'temp_max', 'temp_min', 'station_name']
         resampled = temp_df[cols].groupby(['station_name', pd.Grouper(freq=freq)]).mean().reset_index()
     else:
-        # 단일 요소 처리
         agg_func = 'sum' if element == 'precipitation' else 'mean'
         resampled = temp_df.groupby(['station_name', pd.Grouper(freq=freq)])[element].agg(agg_func).reset_index()
     
@@ -84,7 +94,7 @@ def prepare_chart_data(df: pd.DataFrame, element: str, freq: str) -> pd.DataFram
 
 # ━━━━━ 앱 UI 레이아웃 ━━━━━
 
-st.set_page_config(page_title="기상자료 분석 리포터 v3.0", layout="wide")
+st.set_page_config(page_title="기상자료 분석 리포터 v3.1", layout="wide")
 setup_korean_font()
 
 # 사이드바: 데이터 업로드
@@ -100,18 +110,16 @@ with st.sidebar:
         if 'raw_data' not in st.session_state or st.button("🔄 데이터 새로고침"):
             with st.spinner("데이터를 처리 중입니다..."):
                 processor = WeatherDataProcessor()
-                # data_processor.py의 로직에 따라 데이터 프레임 생성
                 df = processor.process(uploaded_files)
                 df = add_season_column(df)
                 st.session_state.raw_data = df
                 st.success(f"{len(uploaded_files)}개 파일 로드 완료!")
     
     st.divider()
-    st.caption("v3.0 - Powered by Streamlit & Plotly")
+    st.caption("v3.1 - Fixed Font Manager Issue")
 
 # 메인 타이틀
 st.title("🌡️ 기상자료 분석 및 보고서 생성기")
-st.markdown("기상청 ASOS 데이터를 기반으로 대화형 차트와 고품질 보고서를 생성합니다.")
 
 if 'raw_data' not in st.session_state:
     st.info("👈 사이드바에서 기상 자료(CSV)를 먼저 업로드해 주세요.")
@@ -246,7 +254,6 @@ with tab3:
 # ━━━━━ 탭 4: 보고서 다운로드 (기존 기능) ━━━━━
 with tab4:
     st.subheader("정형 보고서 생성")
-    st.info("분석 결과를 엑셀(XLSX) 또는 PDF 형식의 보고서로 다운로드합니다.")
     
     col_dl1, col_dl2 = st.columns(2)
     with col_dl1:
@@ -263,10 +270,7 @@ with tab4:
 with tab5:
     st.header("📖 사용 가이드")
     st.markdown("""
-    1. **데이터 준비**: 기상자료개방포털(data.kma.go.kr)에서 종관기상관측(ASOS) 일자료를 CSV로 다운로드합니다.
-    2. **데이터 업로드**: 왼쪽 사이드바에 CSV 파일들을 드래그앤드롭합니다. (여러 관측소 동시 분석 가능)
-    3. **대화형 분석**: '대화형 차트' 탭에서 기상 요소를 선택하고 마우스를 올려 세부 값을 확인하세요.
-    4. **피벗 분석**: '동적 피벗표' 탭에서 원하는 기준으로 데이터를 요약 집계하고 CSV로 내보낼 수 있습니다.
-    5. **고품질 차트**: 보고서나 발표 자료에 적합한 통계 차트를 생성하고 PNG로 저장하세요.
+    1. **데이터 준비**: 기상자료개방포털에서 ASOS 일자료 CSV를 다운로드합니다.
+    2. **데이터 업로드**: 사이드바에 파일을 업로드합니다.
+    3. **배포 환경 설정**: Streamlit Cloud 사용 시 `packages.txt`에 `fonts-nanum`을 추가해야 한글이 깨지지 않습니다.
     """)
-    st.warning("주의: 업로드하는 파일은 표준 ASOS 일자료 형식이어야 정상적으로 처리됩니다.")
